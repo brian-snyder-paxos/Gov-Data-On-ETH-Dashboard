@@ -54,8 +54,8 @@ export async function getContractData(): Promise<ContractData> {
 			contract.gdp_pdf_hash(),
 			contract.timestamp(),
 		]);
-	} catch (err: any) {
-		const msg = err?.reason || err?.shortMessage || err?.message || "On-chain call failed";
+	} catch (err: unknown) {
+		const msg = (err as any)?.reason || (err as any)?.shortMessage || (err as Error)?.message || "On-chain call failed";
 		throw new Error(`On-chain read failed: ${msg}`);
 	}
 

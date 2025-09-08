@@ -8,8 +8,8 @@ export default async function Home() {
 	let errorMessage: string | null = null;
 	try {
 		data = await getContractData();
-	} catch (err: any) {
-		errorMessage = err?.message || "Failed to load contract data.";
+	} catch (err: unknown) {
+		errorMessage = (err as Error)?.message || "Failed to load contract data.";
 	}
 
 	const badge = (status: NonNullable<typeof data>["verification"]["status"]) => {
