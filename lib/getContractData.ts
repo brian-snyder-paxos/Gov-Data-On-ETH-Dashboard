@@ -33,6 +33,15 @@ function assertEnv(name: string, value: string | undefined): string {
 	return value;
 }
 
+function getErrorMessage(err: unknown): string {
+	if (err && typeof err === 'object') {
+		if ('reason' in err && typeof err.reason === 'string') return err.reason;
+		if ('shortMessage' in err && typeof err.shortMessage === 'string') return err.shortMessage;
+		if ('message' in err && typeof err.message === 'string') return err.message;
+	}
+	return "On-chain call failed";
+}
+
 export async function getContractData(): Promise<ContractData> {
 	const rpcUrl = assertEnv("RPC_URL", process.env.RPC_URL);
 
@@ -55,7 +64,7 @@ export async function getContractData(): Promise<ContractData> {
 			contract.timestamp(),
 		]);
 	} catch (err: unknown) {
-		const msg = (err as any)?.reason || (err as any)?.shortMessage || (err as Error)?.message || "On-chain call failed";
+		const msg = getErrorMessage(err);
 		throw new Error(`On-chain read failed: ${msg}`);
 	}
 
