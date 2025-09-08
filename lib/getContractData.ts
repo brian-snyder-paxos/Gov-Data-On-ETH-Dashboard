@@ -6,23 +6,39 @@ import crypto from "node:crypto";
 
 export const CONTRACT_ADDRESS = "0x36ccdF11044f60F196e981970d592a7DE567ed7b" as const;
 export const PDF_URL = "https://www.bea.gov/sites/default/files/2025-08/gdp2q25-2nd.pdf" as const;
-export const INTERPRETATION_RULE = "Increments of tenths" as const;
+export const INTERPRETATION_RULE = "Quarterly GDP Growth (Annualized)" as const;
+
+// Enhanced ABI for quarterly data (Q1 2025 removed as data unavailable)
 export const CONTRACT_ABI = [
 	"function gdp_q2_2025() view returns (uint256)",
+	"function gdp_q3_2025() view returns (uint256)",
+	"function gdp_q4_2025() view returns (uint256)",
 	"function gdp_pdf_hash() view returns (bytes32)",
 	"function timestamp() view returns (uint256)",
 ] as const;
 
-export type ContractData = {
-	gdpFigure: number; // 3.3
+export type QuarterData = {
+	quarter: string; // "Q2 2025"
+	gdpGrowthRate: number; // 3.3 (as percentage)
 	gdpRaw: string; // "33"
-	interpretation: string; // "Increments of tenths"
-	recordDateUTC: string; // formatted date string
-	onChainHash: string; // 0x... hash from the contract
-	pdfUrl: string; // The PDF URL
+	isAvailable: boolean; // whether this quarter has data
+	recordDateUTC?: string; // when this quarter was recorded
+};
+
+export type ContractData = {
+	currentQuarter: QuarterData;
+	quarters: QuarterData[]; // All available quarters
+	interpretation: string;
+	onChainHash: string;
+	pdfUrl: string;
 	verification: {
 		status: "VERIFIED" | "MISMATCH" | "SOURCE_MISSING";
-		computedHash: string | null; // The hash computed from the fetch, or null on error
+		computedHash: string | null;
+	};
+	metadata: {
+		lastUpdated: string;
+		contractAddress: string;
+		dataSource: string;
 	};
 };
 
@@ -42,6 +58,26 @@ function getErrorMessage(err: unknown): string {
 	return "On-chain call failed";
 }
 
+async function fetchQuarterData(contract: Contract, quarterFunction: string, quarterLabel: string): Promise<QuarterData> {
+	try {
+		const rawValue: bigint = await contract[quarterFunction]();
+		const gdpGrowthRate = Number(rawValue) / 10;
+		return {
+			quarter: quarterLabel,
+			gdpGrowthRate,
+			gdpRaw: rawValue.toString(),
+			isAvailable: true,
+		};
+	} catch {
+		return {
+			quarter: quarterLabel,
+			gdpGrowthRate: 0,
+			gdpRaw: "0",
+			isAvailable: false,
+		};
+	}
+}
+
 export async function getContractData(): Promise<ContractData> {
 	const rpcUrl = assertEnv("RPC_URL", process.env.RPC_URL);
 
@@ -54,12 +90,23 @@ export async function getContractData(): Promise<ContractData> {
 		throw new Error("No contract bytecode found at address on this chain. Verify CONTRACT_ADDRESS and RPC_URL (Ethereum mainnet).");
 	}
 
-	let gdpRawBig: bigint;
+	// Fetch all quarterly data
+	const [q2Data, q3Data, q4Data] = await Promise.all([
+		fetchQuarterData(contract, "gdp_q2_2025", "Q2 2025"),
+		fetchQuarterData(contract, "gdp_q3_2025", "Q3 2025"),
+		fetchQuarterData(contract, "gdp_q4_2025", "Q4 2025"),
+	]);
+
+	// Find the most recent quarter with data
+	const quarters = [q2Data, q3Data, q4Data];
+	const availableQuarters = quarters.filter(q => q.isAvailable);
+	const currentQuarter = availableQuarters[availableQuarters.length - 1] || q2Data;
+
+	// Get metadata (timestamp and hash from the most recent quarter)
 	let hashBytes32: string;
 	let tsBig: bigint;
 	try {
-		[gdpRawBig, hashBytes32, tsBig] = await Promise.all([
-			contract.gdp_q2_2025(),
+		[hashBytes32, tsBig] = await Promise.all([
 			contract.gdp_pdf_hash(),
 			contract.timestamp(),
 		]);
@@ -70,11 +117,15 @@ export async function getContractData(): Promise<ContractData> {
 
 	const timestampMs = Number(tsBig) * 1000;
 	const recordDateUTC = new Date(timestampMs).toUTCString();
+	
+	// Add timestamp to current quarter
+	if (currentQuarter.isAvailable) {
+		currentQuarter.recordDateUTC = recordDateUTC;
+	}
 
-	const gdpRaw = gdpRawBig.toString();
-	const gdpFigure = Number(gdpRawBig) / 10;
-	const onChainHash = hashBytes32; // already 0x... string
+	const onChainHash = hashBytes32;
 
+	// PDF verification (same as before)
 	let status: ContractData["verification"]["status"] = "SOURCE_MISSING";
 	let computedHash: string | null = null;
 
@@ -94,12 +145,16 @@ export async function getContractData(): Promise<ContractData> {
 	}
 
 	return {
-		gdpFigure,
-		gdpRaw,
+		currentQuarter,
+		quarters: quarters.filter(q => q.isAvailable),
 		interpretation: INTERPRETATION_RULE,
-		recordDateUTC,
 		onChainHash,
 		pdfUrl: PDF_URL,
 		verification: { status, computedHash },
+		metadata: {
+			lastUpdated: recordDateUTC,
+			contractAddress: CONTRACT_ADDRESS,
+			dataSource: "U.S. Bureau of Economic Analysis",
+		},
 	};
 } 
